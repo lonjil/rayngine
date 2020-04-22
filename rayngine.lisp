@@ -2,7 +2,7 @@
 
 (in-package #:rayngine)
 
-(defvar *ambient-intensity* (v3:vec 0.2 0.2 0.2))
+(defvar *ambient-intensity* (v3:vec 0.1 0.1 0.1))
 
 (defclass light ()
   ((position :accessor pos :initarg :pos) ;vec3
@@ -26,7 +26,8 @@
 
 (defclass sphere ()
   ((radius :accessor radius :initarg :radius)
-   (center :accessor center :initarg :center)))
+   (center :accessor center :initarg :center)
+   (cam-origin-center :accessor cam-origin-center :initarg :o-c)))
 (defclass plane ()
   ((point :accessor point :initarg :point)
    (normal :accessor normal :initarg :normal)))
@@ -42,25 +43,69 @@
 (defclass camera ()
   ((position :accessor pos :initarg :pos)
    (rotation :accessor rot :initarg :rot) ; quat
+   (rotmat :accessor rotmat :initarg :rotmat)
    (fovy :accessor fovy :initarg :fovy)
    (fovx :accessor fovx :initarg :fovx)))
 
+(defvar *light* (make-instance 'light :pos (v3:vec -6 2 -2) :color (v3:vec 1 1 1)))
 (defvar *scene* (list (make-instance
                        'thing
                        :shape (make-instance
-                               'sphere :radius 1
-                                       :center (v3:vec 0 0 4))
-                       :mat (make-instance 'material :ka (v3:vec 1 0 0)
-                                                     :kd (v3:vec 0.6 0.1 0.1)
-                                                     :ks (v3:vec 0.3 0.1 0.1)))
+                               'sphere :radius 2.0f0
+                                       :center (v3:vec -3 2 3))
+                       :mat (make-instance 'material :ka (v3:vec 0.5 0.5 0.5)
+                                                     :kd (v3:vec 0.7 0.7 0.7)
+                                                     :ks (v3:vec 0.2 0.2 0.2)
+                                                     :kr (v3:vec 0.2 0.2 0.2)
+                                                     :shine 8f0))
                       (make-instance
                        'thing
                        :shape (make-instance
-                               'sphere :radius 0.5
-                                       :center (v3:vec 1 1 3.5))
-                       :mat (make-instance 'material :ka (v3:vec 0.7 0.7 0.7)
-                                                     :kd (v3:vec 0.8 0.8 0.8)
-                                                     :ks (v3:vec 0.1 0.1 0.1)))))
+                               'sphere :radius 1.5f0
+                                       :center (v3:vec 2.25 1.5 2.25))
+                       :mat (make-instance 'material :ka (v3:vec 0.6 0.2 0.2)
+                                                     :kd (v3:vec 0.7 0.2 0.2)
+                                                     :ks (v3:vec 0.2 0.1 0.1)
+                                                     :kr (v3:vec 0.2 0.1 0.1)
+                                                     :shine 8f0))
+                      (make-instance
+                       'thing
+                       :shape (make-instance
+                               'sphere :radius 1.0f0
+                                       :center (v3:vec 1.5 1 -1.5))
+                       :mat (make-instance 'material :ka (v3:vec 0.2 0.6 0.2)
+                                                     :kd (v3:vec 0.2 0.7 0.2)
+                                                     :ks (v3:vec 0.1 0.2 0.1)
+                                                     :kr (v3:vec 0.1 0.2 0.1)
+                                                     :shine 8f0))
+                      (make-instance
+                       'thing
+                       :shape (make-instance
+                               'sphere :radius 0.5f0
+                                       :center (v3:vec -0.75 0.5 -0.75))
+                       :mat (make-instance 'material :ka (v3:vec 0.2 0.2 0.6)
+                                                     :kd (v3:vec 0.2 0.2 0.7)
+                                                     :ks (v3:vec 0.1 0.1 0.2)
+                                                     :kr (v3:vec 0.1 0.1 0.2)
+                                                     :shine 8f0))
+                      (make-instance
+                       'thing
+                       :shape (make-instance
+                               'plane :point (v3:vec 0 0 0) :normal (v3:vec 0 1 0))
+                       :mat (make-instance 'material :ka (v3:vec 0.1 0.1 0.1)
+                                                     :kd (v3:vec 0.1 0.1 0.1)
+                                                     :ks (v3:vec 0.9 0.9 0.9)
+                                                     :kr (v3:vec 0.9 0.9 0.9)
+                                                     :shine 16f0))
+                      (make-instance
+                       'thing
+                       :shape (make-instance
+                               'plane :point (v3:vec 0 0 6) :normal (v3:vec 0 0 -1))
+                       :mat (make-instance 'material :ka (v3:vec 0.1 0.1 0.1)
+                                                     :kd (v3:vec 0.45 0.45 0.45)
+                                                     :ks (v3:vec 0.45 0.45 0.45)
+                                                     :kr (v3:vec 0.2 0.2 0.2)
+                                                     :shine 4f0))))
 
 (defun ambient (material)
   (v3:* (ka material) *ambient-intensity*))
@@ -68,8 +113,13 @@
   (v3:scale (kd material) (v3:dot normal light-dir)))
 (defun specular (material viewer-dir light-dir normal)
   (let ((halfway (v3:normalize (v3:+ viewer-dir light-dir))))
-    (v3:expt (v3:scale (ks material) (max (v3:dot halfway normal) 0f0))
-             (shine material))))
+    (v3:expt! halfway (v3:scale (ks material) (max (v3:dot halfway normal) 0f0))
+              (shine material))))
+(defun shadow-multiplier (light-dir point)
+  (if (closest-intersection (find-scene-intersections (ray point light-dir)
+                                                      *scene*))
+      0f0
+      1f0))
 (defun pointer (origin target)
   (v3:normalize (v3:- target origin)))
 (defun reflection (normal incoming)
@@ -114,6 +164,65 @@
                          (normal plane))
                  denom)))))
 
+(defun intersect2 (ray object)
+  (etypecase object
+    (sphere
+     (let* ((A (v3:dot (dir ray) (dir ray)))
+            (o-c (v3:- (origin ray) (center object)))
+            (B (* 2 (v3:dot (dir ray) o-c)))
+            (C (- (v3:dot o-c o-c) (* (radius object) (radius object)))))
+       (quadratic A B C)))
+    (plane
+     (let ((denom (v3:dot (dir ray) (normal object))))
+       (if (< (abs denom) 5f-5)
+           nil
+           (list (/ (v3:dot (v3:- (point object) (origin ray))
+                            (normal object))
+                    denom)))))))
+
+(defun intersect3 (ray object)
+  (etypecase object
+    (sphere
+     (let* ((dir (dir ray))
+            (A (v3:dot dir dir))
+            (o-c (v3:- (origin ray) (center object)))
+            (B (* 2 (v3:dot dir o-c)))
+            (C (- (v3:dot o-c o-c) (expt (radius object) 2))))
+       (quadratic A B C)))
+    (plane
+     (let* ((n (normal object))
+            (denom (v3:dot (dir ray) n)))
+       (if (< (abs denom) 5f-5)
+           nil
+           (list (/ (v3:dot (v3:- (point object) (origin ray)) n)
+                    denom)))))))
+
+(defun quadratic2 (A B C)
+  (let ((foo (- (* B B) (* 4 A C))))
+    (cond ((> foo 0) (cons (/ (- (sqrt foo) B)
+                              (* 2 A))
+                           (/ (- 0 (sqrt foo) B)
+                              (* 2 A))))
+          ((= foo 0) (/ (- B)
+                        (* 2 A)))
+          ((< foo 0) nil))))
+(defun intersect4 (ray object)
+  (etypecase object
+    (sphere
+     (let* ((dir (dir ray))
+            (A (v3:dot dir dir))
+            (o-c (v3:- (origin ray) (center object)))
+            (B (* 2 (v3:dot dir o-c)))
+            (C (- (v3:dot o-c o-c) (expt (radius object) 2))))
+       (quadratic A B C)))
+    (plane
+     (let* ((n (normal object))
+            (denom (v3:dot (dir ray) n)))
+       (if (< (abs denom) 5f-5)
+           nil
+           (/ (v3:dot (v3:- (point object) (origin ray)) n)
+              denom))))))
+
 (defgeneric find-normal (object point))
 (defmethod find-normal ((sph sphere) point)
   (v3:normalize (v3:- point (center sph))))
@@ -130,7 +239,7 @@
 
 (defun find-thing-intersections (ray thing)
   (let* ((shape (shape thing))
-         (i (intersect ray shape)))
+         (i (intersect3 ray shape)))
     (mapcar (lambda (x) (list x thing)) i)))
 
 (defun find-scene-intersections (ray scene)
@@ -144,6 +253,9 @@
                       y
                       x)
         :finally (return x)))
+
+(defun smarter-intersections (ray scene)
+  )
 
 (defun intersection (ray x)
   (let* ((dist (car x))
@@ -179,27 +291,22 @@
   (q:to-mat3 (rot camera)))
 
 (defun camcr (x y camera)
-  (v3:vec (* (/ (- (* 2 x) *width*) *width*) (tan (fovx camera)))
-          (- (* (/ (- (* 2 y) *height*) *height*) (tan (fovy camera))))
+  (v3:vec (* (/ (- (* 2 x) *width*) *width*) (tan (/ (fovx camera) 2)))
+          (- (* (/ (- (* 2 y) *height*) *height*) (tan (/ (fovy camera) 2))))
           1.0))
+(defun camcr (x y camera)
+  (v3:vec (* (1- (* 2 (/ (+ x 0.5f0) *width*))) (tan (/ (fovx camera) 2)))
+          (* (- 1 (* 2 (/ (+ y 0.0f0) *height*))) (tan (/ (fovy camera) 2)))
+          1))
 (defun eyedir (x y camera)
-  (v3:normalize (m3:*v3 (camspace-rotator camera)
+  (v3:normalize (m3:*v3 (rotmat camera)
                         (camcr x y camera))))
 
-(defun trace-pixel (camera scene x y)
-  (let* ((eyedir (eyedir x y camera))
-         (eyeray (make-instance 'ray :dir eyedir :origin (pos camera)))
-         (intrsctns (find-scene-intersections eyeray scene))
-         (closest (closest-intersection intrsctns)))
-    (if closest
-        (let* ((interx (intersection eyeray closest))
-               (material (mat (cadr closest))))
-          (illumination material interx camera *light*))
-        (v3:vec))))
+
 (defun rgb8 (pixel)
   (map 'vector (lambda (x)
                  (max 0 (min 255 (floor (* 255 x)))))
-       pixel))
+       (v3:expt! pixel pixel (/ 2.2f0))))
 
 (defun render-to-png ()
   (let ((png (make-instance 'zpng:pixel-streamed-png
@@ -210,6 +317,7 @@
                             :if-does-not-exist :create
                             :element-type '(unsigned-byte 8))
       (zpng:start-png png stream)
+      (setf (rotmat *camera*) (camspace-rotator *camera*))
       (loop :for y :below *height*
             :do (loop :for x :below *width*
                       :do (zpng:write-pixel
@@ -226,6 +334,9 @@
         (v3:vec)
         (illumination2 (cadr hit) (intersection ray hit) depth))))
 
+(defun raytrace2 (ray &optional (depth 0))
+  )
+
 (defun reflect (normal dir)
   (v3:- (v3:scale normal (* 2 (v3:dot normal dir)))
         dir))
@@ -235,20 +346,28 @@
         intersection
       (let* ((light-dir (pointer point (pos *light*)))
              (viewer-dir (v3:negate in-dir))
-             (reflection-dir (reflection normal in-dir)))
-        ;(format t "illu: origin: ~a, dir: ~a~%" point reflection-dir)
-        (v3:+ (v3:+ (ambient mat)
-                    (if (<= (v3:dot light-dir normal) 0)
-                        (v3:vec)
-                        (v3:* (color *light*)
-                              (v3:+ (diffuse mat normal light-dir)
-                                    (specular mat viewer-dir light-dir normal)))))
-              (if (< depth *max-depth*)
-                  (v3:* (raytrace (make-instance 'ray :origin point
-                                                      :dir reflection-dir)
-                                  (1+ depth))
-                        (kr mat))
-                  (v3:vec)))))))
+             (reflection-dir (reflection normal in-dir))
+             (result)
+             (temp)
+             (reflp (< depth *max-depth*))
+             (lightp (> (v3:dot light-dir normal) 0)))
+        (when reflp
+          (setf result (raytrace (make-instance
+                                  'ray :origin point
+                                  :dir reflection-dir)
+                                 (1+ depth)))
+          (v3:*! result result (kr mat)))
+        (when lightp
+          (setf temp (specular mat viewer-dir light-dir normal))
+          (v3:+! temp temp (diffuse mat normal light-dir))
+          (v3:*! temp temp (color *light*))
+          ;;(v3:scale! temp temp (shadow-multiplier light-dir point))
+          (if reflp
+              (v3:+! result result temp)
+              (setf result temp)))
+        (if result
+            (v3:+! result result (ambient mat))
+            (ambient mat))))))
 
 (defun trace-pixel2 (x y)
   (let ((ray (ray (pos *camera*) (eyedir x y *camera*))))
