@@ -37,7 +37,7 @@
 (defstruct intersection
   (point (v3:vec) :type v3:vec)
   (normal (v3:vec) :type v3:vec)
-  (uv nil :type (or v2:vec null))
+  (uv (v2:vec) :type v2:vec)
   (in-dir (v3:vec) :type v3:vec))
 
 (defstruct (camera (:constructor %make-camera))
