@@ -47,47 +47,47 @@
    (fovy :accessor fovy :initarg :fovy)
    (fovx :accessor fovx :initarg :fovx)))
 
-(defvar *light* (make-instance 'light :pos (v3:vec -6 2 -2) :color (v3:vec 1 1 1)))
+(defvar *light* (make-instance 'light :pos (v3:vec -6 4 0) :color (v3:vec 1 1 1)))
 (defvar *scene* (list (make-instance
                        'thing
                        :shape (make-instance
                                'sphere :radius 2.0f0
-                                       :center (v3:vec -3 2 3))
+                                       :center (v3:vec -2 2 2))
                        :mat (make-instance 'material :ka (v3:vec 0.5 0.5 0.5)
                                                      :kd (v3:vec 0.7 0.7 0.7)
-                                                     :ks (v3:vec 0.2 0.2 0.2)
+                                                     :ks (v3:vec 0.4 0.4 0.4)
                                                      :kr (v3:vec 0.2 0.2 0.2)
-                                                     :shine 8f0))
+                                                     :shine 5f0))
                       (make-instance
                        'thing
                        :shape (make-instance
                                'sphere :radius 1.5f0
-                                       :center (v3:vec 2.25 1.5 2.25))
+                                       :center (v3:vec 1.5 1.5 2))
                        :mat (make-instance 'material :ka (v3:vec 0.6 0.2 0.2)
                                                      :kd (v3:vec 0.7 0.2 0.2)
-                                                     :ks (v3:vec 0.2 0.1 0.1)
+                                                     :ks (v3:vec 0.4 0.2 0.2)
                                                      :kr (v3:vec 0.2 0.1 0.1)
-                                                     :shine 8f0))
+                                                     :shine 5f0))
                       (make-instance
                        'thing
                        :shape (make-instance
                                'sphere :radius 1.0f0
-                                       :center (v3:vec 1.5 1 -1.5))
+                                       :center (v3:vec 1.5 1 -1))
                        :mat (make-instance 'material :ka (v3:vec 0.2 0.6 0.2)
                                                      :kd (v3:vec 0.2 0.7 0.2)
-                                                     :ks (v3:vec 0.1 0.2 0.1)
+                                                     :ks (v3:vec 0.2 0.4 0.2)
                                                      :kr (v3:vec 0.1 0.2 0.1)
-                                                     :shine 8f0))
+                                                     :shine 5f0))
                       (make-instance
                        'thing
                        :shape (make-instance
                                'sphere :radius 0.5f0
-                                       :center (v3:vec -0.75 0.5 -0.75))
+                                       :center (v3:vec -2 0.5 -1))
                        :mat (make-instance 'material :ka (v3:vec 0.2 0.2 0.6)
                                                      :kd (v3:vec 0.2 0.2 0.7)
-                                                     :ks (v3:vec 0.1 0.1 0.2)
+                                                     :ks (v3:vec 0.2 0.2 0.4)
                                                      :kr (v3:vec 0.1 0.1 0.2)
-                                                     :shine 8f0))
+                                                     :shine 5f0))
                       (make-instance
                        'thing
                        :shape (make-instance
@@ -161,6 +161,8 @@
 (defmethod find-normal ((foo plane) point)
   (normal foo))
 
+;(defun find-normal )
+
 (defgeneric find-uv (object point normal))
 (defmethod find-uv ((o t) point normal)
   (declare (ignore o point))
@@ -222,10 +224,8 @@
                                  :uv (find-uv shape point normal))))
 
 
-(defvar *height* 100)
-(defvar *width* 200)
-(defvar *fovx* (/ pi 4))
-(defvar *fovy* (* (/ *height* *width*) *fovx*))
+(defvar *height* 600)
+(defvar *width* 900)
 
 (defmethod (setf fovy) :after (fovy (cam camera))
   (setf (slot-value cam 'fovx) (* (/ *width* *height*) fovy)))
@@ -322,3 +322,35 @@
 (defun trace-pixel (x y)
   (let ((ray (ray (pos *camera*) (eyedir x y *camera*))))
     (raytrace ray)))
+
+(defun foo ()
+  (dolist (x *scene*)
+    (let ((y (shape x))
+          (m (mat x)))
+    (typecase y
+      (sphere (format t "~
+sphere: c = ~a, r = ~a
+   mat: ka = ~a, kd = ~a,
+        ks = ~a, kr = ~a, shine = ~a~%"
+                      (center y) (radius y)
+                      (ka m) (kd m) (ks m) (kr m) (shine m)))
+      (plane (format t "~
+plane: p = ~a, n = ~a
+  mat: ka = ~a, kd = ~a,
+       ks = ~a, kr = ~a, shine = ~a~%"
+                      (point y) (normal y)
+                      (ka m) (kd m) (ks m) (kr m) (shine m)))))))
+
+(defmacro with-profiling (&body body)
+            (let ((packages (remove-if-not
+                             (lambda (x)
+                               (or (string= x "RAYNGINE") (search "ORIGIN" x)))
+                             (mapcar #'package-name (list-all-packages)))))
+              `(unwind-protect
+                    (progn
+                      (sb-profile:unprofile)
+                      (sb-profile:profile ,@packages)
+                      ,@body)
+                 (sb-profile:report)
+                 (sb-profile:unprofile)
+                 (sb-profile:reset))))

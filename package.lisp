@@ -9,5 +9,6 @@
                     (#:m2 #:origin.mat2)
                     (#:m3 #:origin.mat3)
                     (#:m4 #:origin.mat4)
-                    (#:s #:origin.swizzle))
+                    (#:s #:origin.swizzle)
+                    (#:o #:origin))
   (:shadow #:intersection))
