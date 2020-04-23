@@ -198,30 +198,75 @@
                     denom)))))))
 
 (defun quadratic2 (A B C)
+  (declare (single-float A B C)
+           (optimize speed))
   (let ((foo (- (* B B) (* 4 A C))))
-    (cond ((> foo 0) (cons (/ (- (sqrt foo) B)
-                              (* 2 A))
-                           (/ (- 0 (sqrt foo) B)
-                              (* 2 A))))
-          ((= foo 0) (/ (- B)
-                        (* 2 A)))
-          ((< foo 0) nil))))
-(defun intersect4 (ray object)
-  (etypecase object
-    (sphere
-     (let* ((dir (dir ray))
-            (A (v3:dot dir dir))
-            (o-c (v3:- (origin ray) (center object)))
-            (B (* 2 (v3:dot dir o-c)))
-            (C (- (v3:dot o-c o-c) (expt (radius object) 2))))
-       (quadratic A B C)))
-    (plane
-     (let* ((n (normal object))
-            (denom (v3:dot (dir ray) n)))
-       (if (< (abs denom) 5f-5)
-           nil
-           (/ (v3:dot (v3:- (point object) (origin ray)) n)
-              denom))))))
+    (cond ((plusp foo)
+           (let ((temp (- (sqrt foo) B))
+                 (bar (* 2 A)))
+             (cons (/ temp bar)
+                   (/ (- temp) bar))))
+          ((zerop foo)
+           (/ (- B) (* 2 A))))))
+(defun quadratic3 (A B C)
+  (declare (single-float A B C)
+           (optimize speed))
+  (let ((foo (- (* B B) (* 4 A C))))
+    (cond ((plusp foo)
+           (let ((tmp (sqrt foo))
+                 (bar (* 2 A)))
+             (list (/ (- tmp B) bar)
+                   (/ (- 0 tmp B) bar))))
+          ((zerop foo)
+           (list (/ (- B) (* 2 A)))))))
+(defun quadratic4 (A B C) ;mfiano
+  (declare (optimize speed)
+           (single-float A B C))
+  (let ((foo (- (* B B) (* 4 A C)))
+        (bar (* 2 A)))
+    (cond
+      ((plusp foo)
+       (let ((tmp1 (- (sqrt foo) B))
+             (tmp2 (- (+ (sqrt foo) B))))
+         (list (/ tmp1 bar) (/ tmp2 bar))))
+      ((zerop foo)
+       (list (/ (- B) bar))))))
+(defvar *o-c* (v3:vec))
+(let ((o-c (v3:vec)))
+  (defun intersect4 (ray object depth)
+    (etypecase object
+      (sphere
+       (v3:-! o-c (origin ray) (center object))
+       (let* ((dir (dir ray))
+              (A (v3:dot dir dir))
+              (B (* 2 (v3:dot dir o-c)))
+              (C (- (v3:dot o-c o-c) (expt (radius object) 2))))
+         (quadratic3 A B C)))
+      (plane
+       (let* ((n (normal object))
+              (denom (v3:dot (dir ray) n)))
+         (if (< (abs denom) 5f-5)
+             nil
+             (/ (v3:dot (v3:- (point object) (origin ray)) n)
+                denom)))))))
+
+(let ((o-c (v3:vec)))
+  (defun intersect5 (ray object)
+    (etypecase object
+      (sphere
+       (v3:-! o-c (origin ray) (center object))
+       (let* ((dir (dir ray))
+              (A (v3:dot dir dir))
+              (B (* 2 (v3:dot dir o-c)))
+              (C (- (v3:dot o-c o-c) (expt (radius object) 2))))
+         (quadratic3 A B C)))
+      (plane
+       (let* ((n (normal object))
+              (denom (v3:dot (dir ray) n)))
+         (if (< (abs denom) 5f-5)
+             nil
+             (list (/ (v3:dot (v3:- (point object) (origin ray)) n)
+                      denom))))))))
 
 (defgeneric find-normal (object point))
 (defmethod find-normal ((sph sphere) point)
@@ -239,7 +284,7 @@
 
 (defun find-thing-intersections (ray thing)
   (let* ((shape (shape thing))
-         (i (intersect3 ray shape)))
+         (i (intersect5 ray shape)))
     (mapcar (lambda (x) (list x thing)) i)))
 
 (defun find-scene-intersections (ray scene)
@@ -254,8 +299,39 @@
                       x)
         :finally (return x)))
 
-(defun smarter-intersections (ray scene)
-  )
+(defun smarter-intersections (ray scene depth)
+  (loop :for thing :in scene
+        :for obj := (shape thing)
+        :for intrsct := (intersect4 ray obj depth)
+        :with foo := nil
+        :do (if foo
+                (typecase intrsct
+                  (cons (let* ((fi (car intrsct))
+                               (fo (cdr intrsct))
+                               (objt (if (< fi 5f-5)
+                                         fo
+                                         (if (< fo 5f-5)
+                                             fi
+                                             (min fi fo)))))
+                          (when (< objt (car foo))
+                            (setf (car foo) objt (cdr foo) thing))))
+                  (single-float (when (and (> intrsct 5f-5)
+                                           (< intrsct (car foo)))
+                                  (setf (car foo) intrsct (cdr foo) thing))))
+                (typecase intrsct
+                  (cons (let* ((fi (car intrsct))
+                               (fo (cdr intrsct))
+                               (objt (if (< fi 5f-5)
+                                         fo
+                                         (if (< fo 5f-5)
+                                             fi
+                                             (min fi fo)))))
+                          (setf foo (cons objt thing))))
+                  (single-float (when (> intrsct 5f-5)
+                                  (setf foo (cons intrsct thing))))))
+        :finally (when foo
+                   (setf (cdr foo) (cons (cdr foo) nil))
+                   (return foo))))
 
 (defun intersection (ray x)
   (let* ((dist (car x))
@@ -335,7 +411,10 @@
         (illumination2 (cadr hit) (intersection ray hit) depth))))
 
 (defun raytrace2 (ray &optional (depth 0))
-  )
+  (let ((hit (smarter-intersections ray *scene* depth)))
+    (if (null hit)
+        (v3:vec)
+        (illumination2 (cadr hit) (intersection ray hit) depth))))
 
 (defun reflect (normal dir)
   (v3:- (v3:scale normal (* 2 (v3:dot normal dir)))
@@ -352,7 +431,7 @@
              (reflp (< depth *max-depth*))
              (lightp (> (v3:dot light-dir normal) 0)))
         (when reflp
-          (setf result (raytrace (make-instance
+          (setf result (raytrace2 (make-instance
                                   'ray :origin point
                                   :dir reflection-dir)
                                  (1+ depth)))
@@ -373,3 +452,7 @@
   (let ((ray (ray (pos *camera*) (eyedir x y *camera*))))
     ;(format t "cam: origin: ~a, dir: ~a~%" (origin ray) (dir ray))
     (raytrace ray)))
+(defun trace-pixel3 (x y)
+  (let ((ray (ray (pos *camera*) (eyedir x y *camera*))))
+    ;(format t "cam: origin: ~a, dir: ~a~%" (origin ray) (dir ray))
+    (raytrace2 ray)))
