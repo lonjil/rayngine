@@ -282,6 +282,15 @@
                            png)))
       (zpng:finish-png png))))
 
+(defun render-to-array (array)
+  )
+
+(defun doit ()
+  (setf (rotmat *camera*) (camspace-rotator *camera*))
+  (dotimes (y *height*)
+    (dotimes (x *width*)
+      (rgb8 (trace-pixel x y)))))
+
 (defvar *max-depth* 3)
 
 (defun raytrace (ray &optional (depth 0))
