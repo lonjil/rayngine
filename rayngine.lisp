@@ -298,7 +298,7 @@
   )
 
 (defun doit ()
-  (setf (rotmat *camera*) (camspace-rotator *camera*))
+  (setf (camera-rotation-matrix *camera*) (camspace-rotator *camera*))
   (dotimes (y *height*)
     (dotimes (x *width*)
       (rgb8 (trace-pixel x y)))))
