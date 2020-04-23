@@ -116,8 +116,7 @@
     (v3:expt! halfway (v3:scale (ks material) (max (v3:dot halfway normal) 0f0))
               (shine material))))
 (defun shadow-multiplier (light-dir point)
-  (if (closest-intersection (find-scene-intersections (ray point light-dir)
-                                                      *scene*))
+  (if (smarter-intersections (ray point light-dir) *scene*)
       0f0
       1f0))
 (defun pointer (origin target)
@@ -139,15 +138,15 @@
                (/ (- 0 tmp B) bar))))
       ((zerop foo)
        (/ (- B) bar)))))
-(defun intersect (ray object)
+(defun intersect (ray object o-c)
   (etypecase object
     (sphere
+     (v3:-! o-c (origin ray) (center object))
      (let* ((dir (dir ray))
             (A (v3:dot dir dir))
-            (o-c (v3:- (origin ray) (center object)))
             (B (* 2 (v3:dot dir o-c)))
             (C (- (v3:dot o-c o-c) (expt (radius object) 2))))
-       (quadratic6 A B C)))
+       (quadratic A B C)))
     (plane
      (let* ((n (normal object))
             (denom (v3:dot (dir ray) n)))
@@ -173,7 +172,8 @@
 (defun smarter-intersections (ray scene)
   (loop :for thing :in scene
         :for obj := (shape thing)
-        :for intrsct := (intersect ray obj)
+        :with cache := (v3:vec)
+        :for intrsct := (intersect ray obj cache)
         :with foo := nil
         :do (if foo
                 (typecase intrsct
@@ -271,22 +271,26 @@
                             :element-type '(unsigned-byte 8))
       (zpng:start-png png stream)
       (setf (rotmat *camera*) (camspace-rotator *camera*))
+      #+(or)(dolist (var *scene*)
+        (when (typep var 'sphere)
+          (setf (cam-origin-center var)
+                (v3:- (pos *camera*) (center var)))))
       (loop :for y :below *height*
             :do (loop :for x :below *width*
                       :do (zpng:write-pixel
-                           (rgb8 (trace-pixel2 x y))
+                           (rgb8 (trace-pixel x y))
                            png)))
       (zpng:finish-png png))))
 
 (defvar *max-depth* 3)
 
-(defun raytrace2 (ray &optional (depth 0))
+(defun raytrace (ray &optional (depth 0))
   (let ((hit (smarter-intersections ray *scene*)))
     (if (null hit)
         (v3:vec)
-        (illumination2 (cadr hit) (intersection ray hit) depth))))
+        (illumination (cadr hit) (intersection ray hit) depth))))
 
-(defun illumination2 (thing intersection &optional (depth 0))
+(defun illumination (thing intersection &optional (depth 0))
   (with-accessors ((shape shape) (mat mat)) thing
     (with-accessors ((point point) (normal normal) (uv uv) (in-dir in-dir))
         intersection
@@ -298,7 +302,7 @@
              (reflp (< depth *max-depth*))
              (lightp (> (v3:dot light-dir normal) 0)))
         (when reflp
-          (setf result (raytrace2 (make-instance
+          (setf result (raytrace (make-instance
                                    'ray :origin point
                                    :dir reflection-dir)
                                   (1+ depth)))
@@ -315,6 +319,6 @@
             (v3:+! result result (ambient mat))
             (ambient mat))))))
 
-(defun trace-pixel3 (x y)
+(defun trace-pixel (x y)
   (let ((ray (ray (pos *camera*) (eyedir x y *camera*))))
-    (raytrace2 ray)))
+    (raytrace ray)))
