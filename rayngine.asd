@@ -8,4 +8,7 @@
   :serial t
   :depends-on (#:origin #:zpng)
   :components ((:file "package")
+               (:file "stack")
+               (:file "structures")
+               (:file "sdf")
                (:file "rayngine")))

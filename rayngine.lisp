@@ -4,50 +4,9 @@
 
 (defvar *ambient-intensity* (v3:vec 0.1 0.1 0.1))
 
-(defstruct light
-  (position (v3:vec -6 4 0) :type v3:vec)
-  (color (v3:vec 1) :type v3:vec))
-
-(defstruct material
-  (ambient (v3:vec 0.5) :type v3:vec)
-  (diffuse (v3:vec 0.5) :type v3:vec)
-  (specular (v3:vec 0.5) :type v3:vec)
-  (fresnel (v3:vec 0.5) :type v3:vec)
-  (shininess 1f0 :type single-float))
-
-(defstruct ray
-  (origin (v3:vec) :type v3:vec)
-  (direction (v3:vec) :type v3:vec))
-
 (defun ray-point (ray dist)
   (v3:+ (ray-origin ray) (v3:scale (ray-direction ray) dist)))
 
-(defstruct sphere
-  (radius 1f0 :type single-float)
-  (center (v3:vec) :type v3:vec))
-
-(defstruct plane
-  (point (v3:vec) :type v3:vec)
-  (normal (v3:vec) :type v3:vec))
-
-(defstruct thing
-  shape
-  (material (make-material) :type material))
-
-(defstruct intersection
-  (point (v3:vec) :type v3:vec)
-  (normal (v3:vec) :type v3:vec)
-  (uv (v2:vec) :type v2:vec)
-  (in-dir (v3:vec) :type v3:vec))
-
-(defstruct (camera (:constructor %make-camera))
-  (position (v3:vec) :type v3:vec)
-  (rotation (q:quat 1) :type q:quat)
-  (rotation-matrix (m3:mat 1) :type m3:mat)
-  (fov-x o:pi/4 :type single-float)
-  (fov-y o:pi/4 :type single-float))
-
-(defvar *light* (make-light))
 (defvar *scene* (list (make-thing
                        :shape (make-sphere :radius 2f0
                                            :center (v3:vec -2 2 2))
@@ -86,7 +45,7 @@
                                                 :specular (v3:vec 0.9)
                                                 :fresnel (v3:vec 0.9)
                                                 :shininess 16f0))
-                      (make-thing
+                      #+(or)(make-thing
                        :shape (make-plane :point (v3:vec 0 0 6)
                                           :normal (v3:vec 0 0 -1))
                        :material (make-material :ambient (v3:vec 0.1)
@@ -95,35 +54,46 @@
                                                 :fresnel (v3:vec 0.2)
                                                 :shininess 4f0))))
 
-(defun ambient (material)
+(defun ambient (out material)
   (declare (optimize speed))
-  (v3:* (material-ambient material) *ambient-intensity*))
+  (v3:*! out (material-ambient material) *ambient-intensity*))
 
-(defun diffuse (material normal light-dir)
+(defun diffuse (out material normal light-dir)
   (declare (optimize speed))
-  (v3:scale (material-diffuse material) (v3:dot normal light-dir)))
+  (v3:scale! out (material-diffuse material) (v3:dot normal light-dir)))
 
-(defun specular (material viewer-dir light-dir normal)
-  (let ((halfway (v3:normalize (v3:+ viewer-dir light-dir))))
+(defun specular (out material viewer-dir light-dir normal)
+  (let ((halfway (v3:normalize! out (v3:+! out viewer-dir light-dir))))
     (v3:expt! halfway (v3:scale (material-specular material)
                                 (max (v3:dot halfway normal) 0f0))
               (material-shininess material))))
 
-(defun shadow-multiplier (light-dir point)
-  (declare (optimize speed))
-  (if (smarter-intersections (make-ray :origin point
-                                       :direction light-dir)
-                             *scene*)
-      0f0
-      1f0))
+(defun shadow-p (origin light-dir light-dist)
+  (declare (optimize speed)
+           (v3:vec origin light-dir)
+           (single-float light-dist))
+  (let ((ix (smarter-intersections (make-ray :origin origin
+                                             :direction light-dir)
+                                   *scene*)))
+    (if ix
+        (if (< (the single-float (car ix)) light-dist)
+            t
+            nil)
+        nil)))
 
 (defun pointer (origin target)
   (declare (optimize speed))
   (v3:normalize (v3:- target origin)))
+(defun pointer! (out origin target)
+  (declare (optimize speed))
+  (v3:normalize! out (v3:-! out target origin)))
 
 (defun reflection (normal incoming)
   (declare (optimize speed))
   (v3:- incoming (v3:scale normal (* 2 (v3:dot normal incoming)))))
+(defun reflection! (out normal incoming)
+  (declare (optimize speed))
+  (v3:-! out incoming (v3:scale! out normal (* 2 (v3:dot normal incoming)))))
 
 (defun quadratic (A B C)
   (declare (optimize speed)
@@ -140,29 +110,75 @@
       ((zerop foo)
        (/ (- B) bar)))))
 
-(defun intersect (ray object o-c)
-  (declare (optimize speed))
+(defun intersect (ray object cache)
+  (declare (optimize speed)
+           (ray ray) (v3:vec cache))
   (etypecase object
     (sphere
-     (v3:-! o-c (ray-origin ray) (sphere-center object))
+     (v3:-! cache (ray-origin ray) (sphere-center object))
      (let* ((dir (ray-direction ray))
             (A (v3:dot dir dir))
-            (B (* 2 (v3:dot dir o-c)))
-            (C (- (v3:dot o-c o-c) (expt (sphere-radius object) 2))))
+            (B (* 2 (v3:dot dir cache)))
+            (C (- (v3:dot cache cache) (expt (sphere-radius object) 2))))
        (quadratic A B C)))
     (plane
      (let* ((n (plane-normal object))
             (denom (v3:dot (ray-direction ray) n)))
        (if (< (abs denom) 5f-5)
            nil
-           (/ (v3:dot (v3:- (plane-point object) (ray-origin ray)) n)
+           (/ (v3:dot (v3:-! cache (plane-point object) (ray-origin ray)) n)
               denom))))))
 
-(defun find-normal (object point)
+
+(defun smarter-intersections (ray scene cache)
+  (declare (optimize speed))
+  (loop :for thing :in scene
+        :for obj := (thing-shape thing)
+        :for intrsct := (intersect ray obj cache)
+        :with foo := nil
+        :do (if foo
+                (typecase intrsct
+                  (cons (let* ((fi (car intrsct))
+                               (fo (cdr intrsct))
+                               (objt (if (< fi 3f-4)
+                                         (if (< fo 3f-4)
+                                             nil
+                                             fo)
+                                         (if (< fo 3f-4)
+                                             fi
+                                             (min fi fo)))))
+                          (declare (single-float fi fo))
+                          (when (and objt (< objt (the single-float (car foo))))
+                            (setf (car foo) objt (cdr foo) thing))))
+                  (single-float (when (and (> intrsct 3f-4)
+                                           (< intrsct
+                                              (the single-float (car foo))))
+                                  (setf (car foo) intrsct (cdr foo) thing))))
+                (typecase intrsct
+                  (cons (let* ((fi (car intrsct))
+                               (fo (cdr intrsct))
+                               (objt (locally (declare (single-float fi fo))
+                                       (if (< (the single-float fi) 3f-4)
+                                           (if (< (the single-float fo) 3f-4)
+                                               nil
+                                               fo)
+                                           (if (< (the single-float fo) 3f-4)
+                                               fi
+                                               (min (the single-float fi)
+                                                    fo))))))
+                          (when objt (setf foo (cons objt thing)))))
+                  (single-float (when (> intrsct 3f-4)
+                                  (setf foo (cons intrsct thing))))))
+        :finally (when foo
+                   (setf (cdr foo) (cons (cdr foo) nil))
+                   (return foo))))
+
+
+(defun find-normal! (out object point)
   (declare (optimize speed))
   (etypecase object
-    (sphere (v3:normalize (v3:- point (sphere-center object))))
-    (plane (plane-normal object))))
+    (sphere (v3:normalize! out (v3:-! out point (sphere-center object))))
+    (plane (v3:copy! out (plane-normal object)))))
 
 (defun find-uv (object point normal)
   (declare (optimize speed)
@@ -178,57 +194,13 @@
     (plane
      (v2:vec))))
 
-(defun smarter-intersections (ray scene)
-  (declare (optimize speed))
-  (loop :for thing :in scene
-        :for obj := (thing-shape thing)
-        :with cache := (v3:vec)
-        :for intrsct := (intersect ray obj cache)
-        :with foo := nil
-        :do (if foo
-                (typecase intrsct
-                  (cons (let* ((fi (car intrsct))
-                               (fo (cdr intrsct))
-                               (objt (if (< fi 5f-5)
-                                         (if (< fo 5f-5)
-                                             nil
-                                             fo)
-                                         (if (< fo 5f-5)
-                                             fi
-                                             (min fi fo)))))
-                          (declare (single-float fi fo))
-                          (when (and objt (< objt (the single-float (car foo))))
-                            (setf (car foo) objt (cdr foo) thing))))
-                  (single-float (when (and (> intrsct 5f-5)
-                                           (< intrsct
-                                              (the single-float (car foo))))
-                                  (setf (car foo) intrsct (cdr foo) thing))))
-                (typecase intrsct
-                  (cons (let* ((fi (car intrsct))
-                               (fo (cdr intrsct))
-                               (objt (locally (declare (single-float fi fo))
-                                       (if (< (the single-float fi) 5f-5)
-                                           (if (< (the single-float fo) 5f-5)
-                                               nil
-                                               fo)
-                                           (if (< (the single-float fo) 5f-5)
-                                               fi
-                                               (min (the single-float fi)
-                                                    fo))))))
-                          (when objt (setf foo (cons objt thing)))))
-                  (single-float (when (> intrsct 5f-5)
-                                  (setf foo (cons intrsct thing))))))
-        :finally (when foo
-                   (setf (cdr foo) (cons (cdr foo) nil))
-                   (return foo))))
-
-(defun intersection (ray x)
+(defun intersection (ray x normal)
   (declare (optimize speed))
   (let* ((dist (car x))
          (thing (cadr x))
          (point (ray-point ray dist))
-         (shape (thing-shape thing))
-         (normal (find-normal shape point)))
+         (shape (thing-shape thing)))
+    (find-normal! normal shape point)
     (make-intersection :point point
                        :normal normal
                        :uv (find-uv shape point normal)
@@ -238,18 +210,6 @@
 (defparameter *width* 900)
 (defparameter *height* 600)
 
-(defun make-camera (&key rotation position fov-y)
-  (let ((camera (%make-camera :rotation rotation
-                              :position position
-                              :fov-y fov-y)))
-    (setf (camera-fov-x camera) (* (/ *width* *height*)
-                                   (camera-fov-y camera)))
-    camera))
-
-(defvar *camera* (make-camera :rotation (q:from-axis-angle (v3:vec 1 0 0)
-                                                           (/ o:pi 5f0))
-                              :position (v3:vec 0 7 -7)
-                              :fov-y o:pi/4))
 
 (defun camspace-rotator (camera)
   (q:to-mat3 (camera-rotation camera)))
@@ -266,10 +226,23 @@
   (v3:normalize (m3:*v3 (camera-rotation-matrix camera)
                         (camcr x y camera))))
 
+(declaim (ftype (function (v3:vec) (values (unsigned-byte 8)
+                                           (unsigned-byte 8)
+                                           (unsigned-byte 8)))
+                rgb8))
 (defun rgb8 (pixel)
-  (map 'vector (lambda (x)
-                 (max 0 (min 255 (floor (* 255 x)))))
-       (v3:expt! pixel pixel (/ 2.2f0))))
+  (declare (optimize speed) (v3:vec pixel))
+  (flet ((srgb (f)
+           (declare ((single-float 0f0) f))
+           (max 0 (min 255
+                       (the fixnum
+                            (floor (* 256 (the (single-float 0f0)
+                                               (expt f (/ 2.2f0))))))))))
+    (declare (inline srgb))
+    (v3:with-components ((p pixel))
+      (values (srgb px)
+              (srgb py)
+              (srgb pz)))))
 
 (defun doit ()
   (setf (camera-rotation-matrix *camera*) (camspace-rotator *camera*))
@@ -280,7 +253,7 @@
 (defun render-to-png ()
   (let ((png (make-instance 'zpng:pixel-streamed-png
                             :width *width* :height *height*)))
-    (with-open-file (stream "/tmp/test.png"
+    (with-open-file (stream "test.png"
                             :direction :output
                             :if-exists :supersede
                             :if-does-not-exist :create
@@ -288,66 +261,79 @@
       (zpng:start-png png stream)
       (setf (camera-rotation-matrix *camera*) (camspace-rotator *camera*))
       (loop :for y :below *height*
+            :with arr := (make-array 3 :element-type '(unsigned-byte 8)
+                                       :adjustable nil)
             :do (loop :for x :below *width*
-                      :do (zpng:write-pixel
-                           (rgb8 (trace-pixel x y))
-                           png)))
+                      :do (multiple-value-bind (r g b) (rgb8 (trace-pixel x y))
+                            (setf (aref arr 0) r (aref arr 1) g (aref arr 2) b)
+                            (zpng:write-pixel arr png))))
       (zpng:finish-png png))))
 
 (defun render-to-array (array)
   )
 
-(defun doit ()
-  (setf (camera-rotation-matrix *camera*) (camspace-rotator *camera*))
-  (dotimes (y *height*)
-    (dotimes (x *width*)
-      (rgb8 (trace-pixel x y)))))
-
 (defvar *max-depth* 3)
 
-(defun raytrace (ray &optional (depth 0))
-  (declare (optimize speed))
-  (let ((hit (smarter-intersections ray *scene*)))
-    (if (null hit)
-        (v3:vec)
-        (illumination (cadr hit) (intersection ray hit) depth))))
+(defun raytrace (ray state &optional (depth 0))
+  (declare (optimize debug))
+  (with-temp-vars (cache normal) (state-index state) (state-stack state)
+    (let ((hit (smarter-intersections ray (state-scene state) cache)))
+      (if (null hit)
+          (state-result state)          ;(v3:vec 0.8 0.8 1.7)
+          (illumination (cadr hit) (intersection ray hit normal) state depth)))))
 
-(defun illumination (thing intersection &optional (depth 0))
-  (with-accessors ((shape thing-shape) (mat thing-material)) thing
-    (with-accessors ((point intersection-point)
-                     (normal intersection-normal)
-                     (uv intersection-uv)
-                     (in-dir intersection-in-dir))
-        intersection
-      (let* ((light-dir (pointer point (light-position *light*)))
-             (viewer-dir (v3:negate in-dir))
-             (reflection-dir (reflection normal in-dir))
-             (result)
-             (temp)
-             (reflp (< depth *max-depth*))
-             (lightp (> (v3:dot light-dir normal) 0)))
-        (when reflp
-          (setf result (raytrace (make-ray :origin point
-                                           :direction reflection-dir)
-                                 (1+ depth)))
-          (v3:*! result result (material-fresnel mat)))
-        (when lightp
-          (setf temp (specular mat viewer-dir light-dir normal))
-          (v3:+! temp temp (diffuse mat normal light-dir))
-          (v3:*! temp temp (light-color *light*))
-          ;;(v3:scale! temp temp (shadow-multiplier light-dir point))
-          (if reflp
-              (v3:+! result result temp)
-              (setf result temp)))
-        (if result
-            (v3:+! result result (ambient mat))
-            (ambient mat))))))
+(defun illumination (thing intersection state &optional (depth 0))
+  (with-accessors ((max-depth state-max-depth) (light state-light)
+                   (result state-result) (temp state-temp)
+                   (diff state-diffuse) (spec state-specular)
+                   (ambi state-ambient) (stack state-stack)
+                   (index state-index))
+      state
+    (with-accessors ((shape thing-shape) (mat thing-material)) thing
+      (with-accessors ((point intersection-point)
+                       (normal intersection-normal)
+                       (uv intersection-uv)
+                       (in-dir intersection-in-dir))
+          intersection
+        (with-temp-vars (light-dir viewer-dir reflection-dir)
+                        index stack
+          (pointer! light-dir point (light-position light))
+          (v3:negate! viewer-dir in-dir)
+          (reflection! reflection-dir normal in-dir)
+          (let* ((reflp (< depth max-depth))
+                 (lightp (> (v3:dot light-dir normal) 0)))
+            (v3:copy! result v3:+zero+)
+            (v3:copy! temp v3:+zero+)
+            (when reflp
+              (setf result (raytrace (make-ray :origin point
+                                               :direction reflection-dir)
+                                     state
+                                     (1+ depth)))
+              (v3:*! result result (material-fresnel mat)))
+            (when lightp
+              (let ((light-distance (v3:length (v3:-! temp (light-position light)
+                                                      point))))
+                (let ((shadow (softshadow point light-dir light light-distance state)))
+                  (when (> shadow 0f0)
+                    (v3:copy! temp (specular spec mat viewer-dir light-dir normal))
+                    (v3:+! temp temp (diffuse diff mat normal light-dir))
+                    (v3:*! temp temp (light-color light))
+                    (v3:scale! temp temp (* shadow (/ light-distance)))
+                    (v3:+! result result temp)))))
+            (v3:+! result result (ambient ambi mat))))))))
+
+(defvar *camera* (make-camera :rotation (q:from-axis-angle (v3:vec 1 0 0)
+                                                           (/ o:pi 5f0))
+                              :position (v3:vec 0 7 -7)
+                              :fov-y o:pi/4))
+
+(defvar *state* (make-state :scene *scene*))
 
 (defun trace-pixel (x y)
   (declare (optimize speed))
   (let ((ray (make-ray :origin (camera-position *camera*)
                        :direction (eyedir x y *camera*))))
-    (raytrace ray)))
+    (raytrace ray *state*)))
 
 (defun foo ()
   (dolist (x *scene*)
